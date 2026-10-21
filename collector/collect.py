@@ -121,14 +121,14 @@ def kev():
     return [{k: v.get(k) for k in keep} for v in data["vulnerabilities"] if age_days(v["dateAdded"]) <= 180]
 
 
-def ncsc(days=21):
+def ncsc(days=30):
     base = "https://advisories.ncsc.nl/csaf/v2/"
     rows = [r for r in csv.reader(io.StringIO(get(base + "changes.csv"))) if len(r) >= 2]
     out = []
     for f, d in rows:
         if age_days(d) > days:
             continue
-        if len(out) >= 120:
+        if len(out) >= 160:
             break
         try:
             doc = json.loads(get(base + f))
@@ -202,10 +202,10 @@ def rss(url, domain):
         desc = next((d[k].text for k in ("description", "summary") if k in d and d[k].text), "")
         out.append({"title": strip(d["title"].text if "title" in d else ""), "link": link,
                     "date": iso(parse_date(date)), "desc": strip(desc)[:400], "domain": domain})
-    return [i for i in out if age_days(i["date"]) <= 14]
+    return [i for i in out if age_days(i["date"]) <= 30]
 
 
-def gdelt(q, days=14):
+def gdelt(q, days=30):
     url = ("https://api.gdeltproject.org/api/v2/doc/doc?query=" + urllib.parse.quote(q)
            + f"&mode=artlist&maxrecords=150&sort=datedesc&format=json&timespan={days}d")
     t = ""
