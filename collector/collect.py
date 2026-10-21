@@ -1,0 +1,39 @@
+name: Dreigingsbeeld verzamelen
+
+on:
+  schedule:
+    - cron: "17 * * * *"   # elk uur, op minuut 17
+  workflow_dispatch:        # handmatig starten via het tabblad Actions
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: dreigingsbeeld
+  cancel-in-progress: false
+
+jobs:
+  verzamelen:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - name: Bronnen ophalen
+        env:
+          PAGES_URL: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}
+        run: python3 collector/collect.py
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: site
+
+  publiceren:
+    needs: verzamelen
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v5
