@@ -13,6 +13,7 @@ import os
 import re
 import time
 import urllib.parse
+import urllib.error
 import urllib.request
 import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta, timezone
@@ -24,11 +25,11 @@ NOW = datetime.now(timezone.utc)
 STATUS = {}
 
 FEEDS = {
-    "security.nl": "https://www.security.nl/rss/headlines.xml",
-    "tweakers.net": "https://feeds.feedburner.com/tweakers/mixed",
+    "security.nl": ["https://www.security.nl/rss/headlines.xml", "https://feeds.feedburner.com/securitynl"],
+    "tweakers.net": ["https://feeds.feedburner.com/tweakers/mixed", "https://tweakers.net/feeds/mixed.xml"],
     "techzine.nl": "https://www.techzine.nl/feed/",
-    "computable.nl": "https://www.computable.nl/feed/",
-    "agconnect.nl": "https://www.agconnect.nl/rss.xml",
+    "computable.nl": ["https://www.computable.nl/rss", "https://www.computable.nl/rss.xml", "https://www.computable.nl/feed/"],
+    "agconnect.nl": ["https://www.agconnect.nl/rss", "https://www.agconnect.nl/feed", "https://www.agconnect.nl/rss.xml"],
     "cybernews.com": "https://cybernews.com/feed/",
     "bleepingcomputer.com": "https://www.bleepingcomputer.com/feed/",
 }
@@ -40,11 +41,20 @@ GDELT = {
 
 
 # ---------- hulpfuncties ----------
-def get(url, timeout=60, raw=False):
-    req = urllib.request.Request(url, headers=UA)
-    with urllib.request.urlopen(req, timeout=timeout) as r:
-        data = r.read()
-    return data if raw else data.decode("utf-8", "replace")
+def get(url, timeout=60, raw=False, tries=3):
+    for n in range(tries):
+        try:
+            req = urllib.request.Request(url, headers=UA)
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                data = r.read()
+            return data if raw else data.decode("utf-8", "replace")
+        except urllib.error.HTTPError as e:
+            if e.code not in (429, 500, 502, 503, 504) or n == tries - 1:
+                raise
+        except (urllib.error.URLError, TimeoutError):
+            if n == tries - 1:
+                raise
+        time.sleep(10 * (n + 1))
 
 
 def iso(d):
@@ -171,6 +181,14 @@ def datalekt(days=30):
 
 
 def rss(url, domain):
+    if isinstance(url, list):
+        err = None
+        for u in url:
+            try:
+                return rss(u, domain)
+            except Exception as e:  # noqa: BLE001
+                err = e
+        raise err
     root = ET.fromstring(get(url, raw=True))
     out = []
     for it in root.iter():
@@ -190,13 +208,17 @@ def rss(url, domain):
 def gdelt(q, days=14):
     url = ("https://api.gdeltproject.org/api/v2/doc/doc?query=" + urllib.parse.quote(q)
            + f"&mode=artlist&maxrecords=150&sort=datedesc&format=json&timespan={days}d")
-    for attempt in range(3):
-        t = get(url)
+    t = ""
+    for attempt in range(5):
+        try:
+            t = get(url, tries=1)
+        except Exception as e:  # noqa: BLE001
+            t = str(e)
         if t.strip().startswith("{"):
             arts = json.loads(t).get("articles", [])
             return [{"title": a.get("title", ""), "link": a.get("url"), "domain": a.get("domain", ""),
                      "date": iso(parse_date(a.get("seendate")))} for a in arts]
-        time.sleep(7)
+        time.sleep(15 * (attempt + 1))
     raise RuntimeError(t.strip()[:120])
 
 
@@ -231,9 +253,14 @@ def nvd(days=7):
 
 def euvd(days=7):
     start = (NOW - timedelta(days=days)).strftime("%Y-%m-%d")
-    j = json.loads(get(f"https://euvdservices.enisa.europa.eu/api/search?fromScore=7&toScore=10&size=100&fromDate={start}"))
+    raw = []
+    for page in range(5):
+        j = json.loads(get(f"https://euvdservices.enisa.europa.eu/api/search?fromScore=7&toScore=10&size=100&page={page}&fromDate={start}"))
+        raw += j.get("items", [])
+        if len(j.get("items", [])) < 100:
+            break
     out = []
-    for x in j.get("items", []):
+    for x in raw:
         cve = re.search(r"CVE-\d+-\d+", str(x.get("aliases", "")))
         names = re.findall(r'"name":\s*"([^"]+)"', json.dumps([x.get("enisaIdProduct"), x.get("enisaIdVendor")]))
         out.append({"id": cve.group(0) if cve else x.get("id"), "date": iso(parse_date(x.get("datePublished"))),
@@ -284,7 +311,7 @@ def main():
     g = {}
     for i, (k, q) in enumerate(GDELT.items()):
         if i:
-            time.sleep(7)
+            time.sleep(12)
         g[k] = run(f"GDELT {k}", lambda q=q: gdelt(q), [])
     data["gdeltIncidenten"] = g["incidenten"]
     data["soevereiniteit"] = dedup(g["soevereiniteit"])
