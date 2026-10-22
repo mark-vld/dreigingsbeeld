@@ -276,7 +276,7 @@ CVELIST = "https://raw.githubusercontent.com/CVEProject/cvelistV5/main/"
 def cve_record(cid):
     """Haalt één CVE record op uit de officiële CVE lijst (GitHub) en zet het om naar het eigen formaat."""
     y, n = cid.split("-")[1], cid.split("-")[2]
-    j = json.loads(get(f"{CVELIST}cves/{y}/{n[:-3]}xxx/{cid}.json", tries=2))
+    j = json.loads(get(f"{CVELIST}cves/{y}/{n[:-3]}xxx/{cid}.json", timeout=20, tries=2))
     cna = j.get("containers", {}).get("cna", {})
     adp = j.get("containers", {}).get("adp", [])
     scores = []
@@ -303,15 +303,16 @@ def cvelist(days=7):
         for x in entry.get("new", []):
             if x.get("cveId") and x["cveId"] not in ids:
                 ids.append(x["cveId"])
-    out = []
-    for cid in ids[:1500]:
+    from concurrent.futures import ThreadPoolExecutor
+
+    def one(cid):
         try:
-            r = cve_record(cid)
+            return cve_record(cid)
         except Exception:
-            continue
-        if r["score"] is None or r["score"] >= 7:
-            out.append(r)
-    return out
+            return None
+    with ThreadPoolExecutor(max_workers=16) as ex:
+        recs = list(ex.map(one, ids[-1200:]))
+    return [r for r in recs if r and (r["score"] is None or r["score"] >= 7)]
 
 
 STOP = {"powershell", "sharepoint", "openai", "chatgpt", "github", "gitlab", "linkedin", "youtube", "whatsapp", "paypal",
