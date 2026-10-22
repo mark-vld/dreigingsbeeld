@@ -17,7 +17,7 @@ concurrency:
 jobs:
   verzamelen:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v5
       - name: Bronnen ophalen
