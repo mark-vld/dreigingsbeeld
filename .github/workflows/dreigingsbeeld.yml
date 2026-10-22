@@ -2,13 +2,14 @@ name: Dreigingsbeeld verzamelen
 
 on:
   schedule:
-    - cron: "7,27,47 * * * *"   # drie keer per uur
-  workflow_dispatch:        # handmatig starten via het tabblad Actions
+    - cron: "7,27,47 * * * *"   # reserve als de keten onderbroken is
+  workflow_dispatch:            # handmatig of door de keten
 
 permissions:
   contents: read
   pages: write
   id-token: write
+  actions: write
 
 concurrency:
   group: dreigingsbeeld
@@ -37,3 +38,16 @@ jobs:
     steps:
       - id: deployment
         uses: actions/deploy-pages@v5
+
+  volgende:
+    needs: [verzamelen, publiceren]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Wachten en volgende run starten
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          sleep 1200
+          gh workflow run dreigingsbeeld.yml --repo ${{ github.repository }} --ref ${{ github.ref_name }}
