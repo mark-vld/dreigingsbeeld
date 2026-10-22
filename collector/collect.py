@@ -36,6 +36,7 @@ FEEDS = {
 GDELT = {
     "incidenten": "(hack OR hackers OR datalek OR ransomware OR cyberaanval OR ddos OR phishing OR gehackt OR cyberincident) sourcecountry:netherlands",
     "nieuws": "(domain:security.nl OR domain:tweakers.net OR domain:techzine.nl OR domain:computable.nl OR domain:agconnect.nl OR domain:ncsc.nl OR domain:cybernews.com)",
+    "kwetsbaarheden": "(kwetsbaarheid OR kwetsbaarheden OR lek OR zero-day OR noodpatch OR beveiligingsupdate OR \"offline gehaald\") sourcecountry:netherlands",
     "soevereiniteit": '("CLOUD Act" OR soevereiniteit OR "digitale autonomie" OR "digitale soevereiniteit" OR exportbeperking OR exportcontrole OR "Amerikaanse sancties" OR "Europese cloud") sourcecountry:netherlands',
 }
 
@@ -269,6 +270,99 @@ def euvd(days=7):
     return out
 
 
+CVELIST = "https://raw.githubusercontent.com/CVEProject/cvelistV5/main/"
+
+
+def cve_record(cid):
+    """Haalt één CVE record op uit de officiële CVE lijst (GitHub) en zet het om naar het eigen formaat."""
+    y, n = cid.split("-")[1], cid.split("-")[2]
+    j = json.loads(get(f"{CVELIST}cves/{y}/{n[:-3]}xxx/{cid}.json", tries=2))
+    cna = j.get("containers", {}).get("cna", {})
+    adp = j.get("containers", {}).get("adp", [])
+    scores = []
+    for c in [cna] + adp:
+        for m in c.get("metrics", []):
+            for k, v in m.items():
+                if k.startswith("cvssV") and isinstance(v, dict) and v.get("baseScore") is not None:
+                    scores.append(float(v["baseScore"]))
+    cwes = " ".join(d.get("cweId") or d.get("description", "") for c in [cna] + adp
+                    for pt in c.get("problemTypes", []) for d in pt.get("descriptions", []))
+    names = " ".join(f'{a.get("vendor", "")} {a.get("product", "")}' for a in cna.get("affected", []))
+    kev = any("kev" in json.dumps(c).lower() and "dateadded" in json.dumps(c).lower() for c in adp)
+    return {"id": cid, "date": j.get("cveMetadata", {}).get("datePublished", ""), "score": max(scores) if scores else None,
+            "desc": next((d["value"] for d in cna.get("descriptions", []) if d.get("lang", "").startswith("en")), "")[:600],
+            "cwe": cwes, "names": names, "inKev": kev}
+
+
+def cvelist(days=7):
+    log = json.loads(get(CVELIST + "cves/deltaLog.json", timeout=120))
+    ids = []
+    for entry in log:
+        if age_days(entry.get("fetchTime")) > days:
+            continue
+        for x in entry.get("new", []):
+            if x.get("cveId") and x["cveId"] not in ids:
+                ids.append(x["cveId"])
+    out = []
+    for cid in ids[:1500]:
+        try:
+            r = cve_record(cid)
+        except Exception:
+            continue
+        if r["score"] is None or r["score"] >= 7:
+            out.append(r)
+    return out
+
+
+STOP = {"powershell", "sharepoint", "openai", "chatgpt", "github", "gitlab", "linkedin", "youtube", "whatsapp", "paypal",
+        "tiktok", "javascript", "wordpress", "fortigate", "fortios", "fortimail", "fortisiem", "netscaler", "postgresql",
+        "mysql", "macos", "iphone", "ipad", "android", "onedrive", "outlook", "teams", "microsoft", "windows", "deepseek",
+        "openssl", "openssh", "bleepingcomputer", "cybernews", "techzine", "tweakers", "security", "nextcloud", "icloud",
+        "airdrop", "bitlocker", "sonicwall", "crowdstrike", "cloudflare", "servicenow", "workday", "salesforce", "mastodon",
+        "bluesky", "telegram", "signal", "zivver", "topdesk", "notubiz", "datalekt", "ransomware", "phishing", "malware"}
+THREAT = re.compile(r"lek|kwetsbaar|vulnerab|exploit|zero.day|aanval|attack|patch|cve-|hack|ransomware|offline|misbruik|flaw|bug|rce", re.I)
+
+
+def opkomend(items, ncsc_items, window=4):
+    """Detecteert dreigingen die in korte tijd in meerdere onafhankelijke bronnen opduiken (CVE nummers en benamingen)."""
+    groups = {}
+    def add(key, kind, it):
+        g = groups.setdefault(key.lower(), {"key": key, "kind": kind, "items": []})
+        g["items"].append(it)
+    for it in items:
+        if age_days(it.get("date")) > window:
+            continue
+        text = f'{it.get("title", "")} {it.get("desc", "")}'
+        if not THREAT.search(text):
+            continue
+        for c in set(re.findall(r"CVE-\d{4}-\d{4,}", text, re.I)):
+            add(c.upper(), "cve", it)
+        for w in set(re.findall(r"\b[A-Za-z][A-Za-z0-9]*(?:[a-z][A-Z]|[A-Za-z]\d[A-Za-z])[A-Za-z0-9]*\b", text)):
+            if len(w) >= 5 and w.lower() not in STOP and not re.match(r"^(i|e)[A-Z]", w):
+                add(w, "naam", it)
+        for w in set(re.findall(r"\b\w+(?:shell|bleed|jack|hammer|doom|storm)\b", text, re.I)):
+            if w.lower() not in STOP:
+                add(w, "naam", it)
+    out = []
+    for g in groups.values():
+        doms = sorted({i.get("domain", "") for i in g["items"]})
+        if len(doms) < 2:
+            continue
+        its = sorted(g["items"], key=lambda i: i.get("date", ""))
+        cves = sorted({c.upper() for i in its for c in re.findall(r"CVE-\d{4}-\d{4,}", f'{i.get("title","")} {i.get("desc","")}', re.I)})
+        if g["kind"] == "cve":
+            cves = [g["key"]]
+        ncsc_hit = [n["id"] for n in ncsc_items if g["key"].lower() in (n["title"] + " " + " ".join(n.get("cves", []))).lower()
+                    or any(c in n.get("cves", []) for c in cves)]
+        out.append({"key": g["key"], "kind": g["kind"], "bronnen": doms, "n": len(its), "eerste": its[0].get("date"),
+                    "laatste": its[-1].get("date"), "cves": cves[:10], "ncsc": ncsc_hit[:5],
+                    "berichten": [{k: i.get(k) for k in ("title", "link", "domain", "date")} for i in its[-12:]]})
+    # samenvoegen: een CVE groep die volledig binnen een naamgroep valt verdwijnt
+    names = [o for o in out if o["kind"] == "naam"]
+    out = [o for o in out if not (o["kind"] == "cve" and any(o["key"] in n["cves"] for n in names))]
+    return sorted(out, key=lambda o: (len(o["bronnen"]), o["n"]), reverse=True)[:12]
+
+
 def epss(ids):
     out = {}
     ids = sorted(set(i for i in ids if i and i.startswith("CVE-")))
@@ -315,19 +409,44 @@ def main():
         g[k] = run(f"GDELT {k}", lambda q=q: gdelt(q), [])
     data["gdeltIncidenten"] = g["incidenten"]
     data["soevereiniteit"] = dedup(g["soevereiniteit"])
-    data["nieuws"] = sorted(dedup(news + g["nieuws"]), key=lambda i: i["date"], reverse=True)
+    data["nieuws"] = sorted(dedup(news + g["nieuws"] + g["kwetsbaarheden"]), key=lambda i: i["date"], reverse=True)
 
-    cves = run("NVD", nvd, None)
+    cves = run("CVE lijst (cvelistV5)", cvelist, None)
+    if not cves:
+        cves = run("NVD", nvd, None)
     if cves is None:
         cves = run("EUVD", euvd, [])
+
+    pool = data["nieuws"] + g["incidenten"]
+    data["opkomend"] = run("Opkomende dreigingen", lambda: opkomend(pool, data["ncsc"]), [])
+    # CVE's die in nieuws of opkomende dreigingen genoemd worden, gericht ophalen
+    known = {v["id"] for v in cves}
+    wanted = []
+    for o in data["opkomend"]:
+        wanted += o["cves"]
+    for n in data["nieuws"][:300]:
+        wanted += [c.upper() for c in re.findall(r"CVE-\d{4}-\d{4,}", f'{n.get("title","")} {n.get("desc","")}', re.I)]
+    for cid in list(dict.fromkeys(wanted))[:40]:
+        if cid in known:
+            continue
+        try:
+            r = cve_record(cid)
+            r["genoemd"] = True
+            cves.append(r)
+            known.add(cid)
+        except Exception:
+            pass
     data["nvd"] = cves
 
     scores = run("EPSS", lambda: epss([v["cveID"] for v in data["kev"] if age_days(v["dateAdded"]) <= 90]
-                                      + [v["id"] for v in cves]), {})
+                                      + [v["id"] for v in cves][:2000]), {})
     for v in data["kev"]:
         v["epss"] = scores.get(v["cveID"])
     for v in data["nvd"]:
         v["epss"] = scores.get(v["id"])
+    byid = {v["id"]: v for v in data["nvd"]}
+    for o in data["opkomend"]:
+        o["cveinfo"] = [{k: byid[c].get(k) for k in ("id", "score", "desc", "names", "epss", "cwe")} for c in o["cves"] if c in byid]
 
     data["status"] = STATUS
     with open(os.path.join(OUT, "dreigingsbeeld.json"), "w", encoding="utf-8") as fh:
