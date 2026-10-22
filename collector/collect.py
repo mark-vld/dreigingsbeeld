@@ -42,7 +42,7 @@ GDELT = {
 
 
 # ---------- hulpfuncties ----------
-def get(url, timeout=60, raw=False, tries=3):
+def get(url, timeout=30, raw=False, tries=2):
     for n in range(tries):
         try:
             req = urllib.request.Request(url, headers=UA)
@@ -55,7 +55,7 @@ def get(url, timeout=60, raw=False, tries=3):
         except (urllib.error.URLError, TimeoutError):
             if n == tries - 1:
                 raise
-        time.sleep(10 * (n + 1))
+        time.sleep(5)
 
 
 def iso(d):
@@ -95,9 +95,11 @@ def run(name, fn, default):
     try:
         v = fn()
         STATUS[name] = {"ok": True, "n": len(v), "s": round(time.time() - t, 1)}
+        print(f"{name}: ok, {len(v)} items, {STATUS[name]['s']}s", flush=True)
         return v
     except Exception as e:  # noqa: BLE001
         STATUS[name] = {"ok": False, "err": f"{type(e).__name__}: {e}"[:200]}
+        print(f"{name}: FOUT na {round(time.time() - t, 1)}s: {STATUS[name]['err']}", flush=True)
         return default
 
 
@@ -125,16 +127,18 @@ def kev():
 def ncsc(days=30):
     base = "https://advisories.ncsc.nl/csaf/v2/"
     rows = [r for r in csv.reader(io.StringIO(get(base + "changes.csv"))) if len(r) >= 2]
-    out = []
-    for f, d in rows:
-        if age_days(d) > days:
-            continue
-        if len(out) >= 160:
-            break
+    from concurrent.futures import ThreadPoolExecutor
+    files = [f for f, d in rows if age_days(d) <= days][:160]
+
+    def load(f):
         try:
-            doc = json.loads(get(base + f))
+            return json.loads(get(base + f, timeout=20))
         except Exception:
-            continue
+            return None
+    with ThreadPoolExecutor(max_workers=8) as ex:
+        docs = [d for d in ex.map(load, files) if d]
+    out = []
+    for doc in docs:
         notes = doc["document"].get("notes", [])
         note = lambda t: next((n.get("text", "") for n in notes if n.get("title") == t), "")  # noqa: E731
         names = []
@@ -210,16 +214,16 @@ def gdelt(q, days=30):
     url = ("https://api.gdeltproject.org/api/v2/doc/doc?query=" + urllib.parse.quote(q)
            + f"&mode=artlist&maxrecords=150&sort=datedesc&format=json&timespan={days}d")
     t = ""
-    for attempt in range(5):
+    for attempt in range(3):
         try:
-            t = get(url, tries=1)
+            t = get(url, timeout=25, tries=1)
         except Exception as e:  # noqa: BLE001
             t = str(e)
         if t.strip().startswith("{"):
             arts = json.loads(t).get("articles", [])
             return [{"title": a.get("title", ""), "link": a.get("url"), "domain": a.get("domain", ""),
                      "date": iso(parse_date(a.get("seendate")))} for a in arts]
-        time.sleep(15 * (attempt + 1))
+        time.sleep(10)
     raise RuntimeError(t.strip()[:120])
 
 
