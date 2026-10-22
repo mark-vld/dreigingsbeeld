@@ -102,13 +102,23 @@ def run(name, fn, default):
         return default
 
 
-def dedup(items, key=lambda i: i["title"].lower()[:60]):
+def _nt(t):
+    return re.sub(r"[^a-z0-9]+", "", (t or "").lower())[:60]
+
+
+def _nl(u):
+    return re.sub(r"[?#].*$", "", re.sub(r"^https?://(www\.)?", "", (u or "").lower())).rstrip("/")
+
+
+def dedup(items, key=None):
+    """Ontdubbelt op genormaliseerde titel én op link (zelfde artikel via RSS en GDELT)."""
     seen, out = set(), []
     for i in items:
-        k = key(i)
-        if k and k not in seen:
-            seen.add(k)
-            out.append(i)
+        a, b = _nt(i.get("title")), _nl(i.get("link"))
+        if (a and a in seen) or (b and b in seen):
+            continue
+        seen.update(x for x in (a, b) if x)
+        out.append(i)
     return out
 
 
@@ -323,7 +333,8 @@ STOP = {"powershell", "sharepoint", "openai", "chatgpt", "github", "gitlab", "li
         "mysql", "macos", "iphone", "ipad", "android", "onedrive", "outlook", "teams", "microsoft", "windows", "deepseek",
         "openssl", "openssh", "bleepingcomputer", "cybernews", "techzine", "tweakers", "security", "nextcloud", "icloud",
         "airdrop", "bitlocker", "sonicwall", "crowdstrike", "cloudflare", "servicenow", "workday", "salesforce", "mastodon",
-        "bluesky", "telegram", "signal", "zivver", "topdesk", "notubiz", "datalekt", "ransomware", "phishing", "malware"}
+        "bluesky", "telegram", "signal", "zivver", "topdesk", "notubiz", "datalekt", "ransomware", "phishing", "malware",
+        "digid", "mijnoverheid", "eherkenning", "ideal", "postnl", "youtube", "iprox", "openai", "nvidia", "amazon", "linux"}
 THREAT = re.compile(r"lek|kwetsbaar|vulnerab|exploit|zero.day|aanval|attack|patch|cve-|hack|ransomware|offline|misbruik|flaw|bug|rce", re.I)
 
 
