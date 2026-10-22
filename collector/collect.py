@@ -26,17 +26,18 @@ STATUS = {}
 
 FEEDS = {
     "security.nl": ["https://www.security.nl/rss/headlines.xml", "https://feeds.feedburner.com/securitynl"],
-    "tweakers.net": ["https://feeds.feedburner.com/tweakers/mixed", "https://tweakers.net/feeds/mixed.xml"],
+    "tweakers.net": ["https://tweakers.net/feed/mixed.xml", "https://tweakers.net/feeds/mixed.xml", "https://tweakers.net/feeds/nieuws.xml"],
     "techzine.nl": "https://www.techzine.nl/feed/",
     "computable.nl": ["https://www.computable.nl/rss", "https://www.computable.nl/rss.xml", "https://www.computable.nl/feed/"],
-    "agconnect.nl": ["https://www.agconnect.nl/rss", "https://www.agconnect.nl/feed", "https://www.agconnect.nl/rss.xml"],
+    "agconnect.nl": ["https://www.agconnect.nl/rss/nieuws", "https://www.agconnect.nl/rss", "https://www.agconnect.nl/feed", "https://www.agconnect.nl/rss.xml", "https://www.agconnect.nl/feeds/rss"],
+    "nos.nl tech": "https://feeds.nos.nl/nosnieuwstech",
+    "ncsc.nl": ["https://www.ncsc.nl/actueel/nieuws/rss", "https://www.ncsc.nl/rss"],
+    "binnenlandsbestuur.nl": ["https://www.binnenlandsbestuur.nl/rss", "https://www.binnenlandsbestuur.nl/rss.xml"],
     "cybernews.com": "https://cybernews.com/feed/",
     "bleepingcomputer.com": "https://www.bleepingcomputer.com/feed/",
 }
 GDELT = {
-    "incidenten": "(hack OR hackers OR datalek OR ransomware OR cyberaanval OR ddos OR phishing OR gehackt OR cyberincident) sourcecountry:netherlands",
-    "nieuws": "(domain:security.nl OR domain:tweakers.net OR domain:techzine.nl OR domain:computable.nl OR domain:agconnect.nl OR domain:ncsc.nl OR domain:cybernews.com)",
-    "kwetsbaarheden": "(kwetsbaarheid OR kwetsbaarheden OR lek OR zero-day OR noodpatch OR beveiligingsupdate OR \"offline gehaald\") sourcecountry:netherlands",
+    "incidenten": "(hack OR hackers OR datalek OR ransomware OR cyberaanval OR ddos OR phishing OR gehackt OR cyberincident OR kwetsbaarheid OR lek OR zero-day OR noodpatch OR \"offline gehaald\") sourcecountry:netherlands",
     "soevereiniteit": '("CLOUD Act" OR soevereiniteit OR "digitale autonomie" OR "digitale soevereiniteit" OR exportbeperking OR exportcontrole OR "Amerikaanse sancties" OR "Europese cloud") sourcecountry:netherlands',
 }
 
@@ -216,14 +217,14 @@ def gdelt(q, days=30):
     t = ""
     for attempt in range(3):
         try:
-            t = get(url, timeout=25, tries=1)
+            t = get(url, timeout=30, tries=1)
         except Exception as e:  # noqa: BLE001
             t = str(e)
         if t.strip().startswith("{"):
             arts = json.loads(t).get("articles", [])
             return [{"title": a.get("title", ""), "link": a.get("url"), "domain": a.get("domain", ""),
                      "date": iso(parse_date(a.get("seendate")))} for a in arts]
-        time.sleep(10)
+        time.sleep(30)
     raise RuntimeError(t.strip()[:120])
 
 
@@ -410,9 +411,10 @@ def main():
     g = {}
     for i, (k, q) in enumerate(GDELT.items()):
         if i:
-            time.sleep(12)
+            time.sleep(30)
         g[k] = run(f"GDELT {k}", lambda q=q: gdelt(q), [])
     data["gdeltIncidenten"] = g["incidenten"]
+    g["nieuws"], g["kwetsbaarheden"] = [], g["incidenten"]
     data["soevereiniteit"] = dedup(g["soevereiniteit"])
     data["nieuws"] = sorted(dedup(news + g["nieuws"] + g["kwetsbaarheden"]), key=lambda i: i["date"], reverse=True)
 
