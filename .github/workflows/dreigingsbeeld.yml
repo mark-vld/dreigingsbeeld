@@ -2,7 +2,7 @@ name: Dreigingsbeeld verzamelen
 
 on:
   schedule:
-    - cron: "17 * * * *"   # elk uur, op minuut 17
+    - cron: "7,27,47 * * * *"   # drie keer per uur
   workflow_dispatch:        # handmatig starten via het tabblad Actions
 
 permissions:
