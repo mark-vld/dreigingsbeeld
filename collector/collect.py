@@ -29,10 +29,8 @@ FEEDS = {
     "tweakers.net": ["https://tweakers.net/feed/mixed.xml", "https://tweakers.net/feeds/mixed.xml", "https://tweakers.net/feeds/nieuws.xml"],
     "techzine.nl": "https://www.techzine.nl/feed/",
     "computable.nl": ["https://www.computable.nl/rss", "https://www.computable.nl/rss.xml", "https://www.computable.nl/feed/"],
-    "agconnect.nl": ["https://www.agconnect.nl/rss/nieuws", "https://www.agconnect.nl/rss", "https://www.agconnect.nl/feed", "https://www.agconnect.nl/rss.xml", "https://www.agconnect.nl/feeds/rss"],
-    "nos.nl tech": "https://feeds.nos.nl/nosnieuwstech",
-    "ncsc.nl": ["https://www.ncsc.nl/actueel/nieuws/rss", "https://www.ncsc.nl/rss"],
-    "binnenlandsbestuur.nl": ["https://www.binnenlandsbestuur.nl/rss", "https://www.binnenlandsbestuur.nl/rss.xml"],
+    "nos.nl": "https://feeds.nos.nl/nosnieuwstech",
+    "ncsc.nl": "https://feeds.ncsc.nl/nieuws.rss",
     "cybernews.com": "https://cybernews.com/feed/",
     "bleepingcomputer.com": "https://www.bleepingcomputer.com/feed/",
 }
