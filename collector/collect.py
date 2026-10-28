@@ -405,6 +405,14 @@ def ransomware():
 
 
 # ---------- samenstellen ----------
+GOVRE = re.compile(r"overheid|provincie|provinciale|gemeente|waterschap|hoogheemraadschap|rijkswaterstaat|ministerie|veiligheidsregio|omgevingsdienst|politie|defensie|uwv|belastingdienst", re.I)
+
+
+def _gov(v):
+    """Algemene telling voor de trend: incident bij een overheidsorganisatie (zelfde indeling als het dashboard, zonder organisatiespecifieke gegevens)."""
+    return bool(GOVRE.search(f'{v.get("branche","")} {v.get("orgname","")} {v.get("title","")}'))
+
+
 def main():
     os.makedirs(OUT, exist_ok=True)
     data = {"generated": iso(NOW)}
@@ -482,6 +490,9 @@ def main():
         "ncscHoog": sum(1 for v in data["ncsc"] if "high" in (v["schade"] or "").lower() and age_days(v["date"]) <= 7),
         "cve9": sum(1 for v in cves if (v["score"] or 0) >= 9 and age_days(v["date"]) <= 7),
         "incidenten7": sum(1 for v in data["datalekt"] if age_days(v["date"]) <= 7),
+        "overheid7": sum(1 for v in data["datalekt"] if age_days(v["date"]) <= 7 and _gov(v)),
+        "provincie7": sum(1 for v in data["datalekt"] if age_days(v["date"]) <= 7 and re.search(r"provincie|provinciale", f'{v.get("orgname","")} {v.get("title","")}', re.I)),
+        "bedrijven7": sum(1 for v in data["datalekt"] if age_days(v["date"]) <= 7 and not _gov(v)),
         "ransomwareNL7": sum(1 for v in data["ransomware"] if age_days(v["date"]) <= 7),
     }
     hist = [h for h in hist if h.get("date") != today] + [row]
