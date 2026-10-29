@@ -130,14 +130,14 @@ def kev():
         data = json.loads(get("https://raw.githubusercontent.com/cisagov/kev-data/main/known_exploited_vulnerabilities.json"))
     keep = ("cveID", "vendorProject", "product", "vulnerabilityName", "dateAdded", "dueDate",
             "knownRansomwareCampaignUse", "requiredAction", "shortDescription", "cwes")
-    return [{k: v.get(k) for k in keep} for v in data["vulnerabilities"] if age_days(v["dateAdded"]) <= 180]
+    return [{k: v.get(k) for k in keep} for v in data["vulnerabilities"] if age_days(v["dateAdded"]) <= ARCH_DAYS]
 
 
-def ncsc(days=30):
+def ncsc(days=30, limit=160):
     base = "https://advisories.ncsc.nl/csaf/v2/"
     rows = [r for r in csv.reader(io.StringIO(get(base + "changes.csv"))) if len(r) >= 2]
     from concurrent.futures import ThreadPoolExecutor
-    files = [f for f, d in rows if age_days(d) <= days][:160]
+    files = [f for f, d in rows if age_days(d) <= days][:limit]
 
     def load(f):
         try:
@@ -170,10 +170,20 @@ def ncsc(days=30):
     return out
 
 
-def datalekt(days=30):
+def datalekt(days=30, after_dt=None):
     base = "https://datalekt.nl/wp-json/wp/v2/"
-    after = (NOW - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%S")
-    inc = json.loads(get(base + f"incidents?per_page=100&after={after}&_fields=id,date,link,title,content,meta,gebeurtenis,branche"))
+    after = (after_dt or (NOW - timedelta(days=days))).strftime("%Y-%m-%dT%H:%M:%S")
+    inc = []
+    for page in range(1, 30):
+        try:
+            chunk = json.loads(get(base + f"incidents?per_page=100&page={page}&after={after}&_fields=id,date,link,title,content,meta,gebeurtenis,branche"))
+        except urllib.error.HTTPError as e:
+            if e.code == 400:   # voorbij de laatste pagina
+                break
+            raise
+        inc += chunk
+        if len(chunk) < 100:
+            break
     tax = {}
     for t in ("gebeurtenis", "branche"):
         try:
@@ -401,7 +411,7 @@ def ransomware():
     except Exception:
         out = [i for i in rss("https://www.ransomware.live/rss.xml", "ransomware.live")
                if re.search(r"netherlands|nederland|\.nl\b|🇳🇱", i["title"] + " " + i["desc"], re.I)]
-    return [i for i in out if age_days(i["date"]) <= 60]
+    return [i for i in out if age_days(i["date"]) <= ARCH_DAYS]
 
 
 # ---------- samenstellen ----------
@@ -411,6 +421,80 @@ GOVRE = re.compile(r"overheid|provincie|provinciale|gemeente|waterschap|hoogheem
 def _gov(v):
     """Algemene telling voor de trend: incident bij een overheidsorganisatie (zelfde indeling als het dashboard, zonder organisatiespecifieke gegevens)."""
     return bool(GOVRE.search(f'{v.get("branche","")} {v.get("orgname","")} {v.get("title","")}'))
+
+
+ARCH_DAYS = 460   # ongeveer 15 maanden: 90 dagen, de 90 dagen daarvoor en dezelfde periode een jaar eerder
+
+
+def quarter_start(d, back=0):
+    q = (d.month - 1) // 3 - back
+    y = d.year + q // 4
+    return datetime(y, (q % 4) * 3 + 1, 1, tzinfo=timezone.utc)
+
+
+def merge(old, new, key):
+    seen = {}
+    for x in (old or []) + (new or []):
+        k = key(x)
+        if k:
+            seen[k] = x
+    return [x for x in seen.values() if age_days(x.get("date") or x.get("laatste")) <= ARCH_DAYS]
+
+
+def archief(data):
+    """Bouwt een archief op voor kwartaalanalyses (90 dagen). Bij de eerste run worden bronnen met eigen historie 185 dagen teruggevuld."""
+    arch = {}
+    if PAGES_URL:
+        try:
+            arch = json.loads(get(PAGES_URL + "/archief.json", timeout=60))
+        except Exception:
+            arch = {}
+    arch.setdefault("sinds", iso(NOW))
+    # datalekt: eenmalig 185 dagen terugvullen
+    dl = data["datalekt"]
+    if not arch.get("datalekt_terug"):
+        try:
+            dl = dl + datalekt(after_dt=NOW - timedelta(days=185))
+            arch["datalekt_terug"] = iso(NOW)
+        except Exception as e:  # noqa: BLE001
+            STATUS["archief datalekt"] = {"ok": False, "err": str(e)[:200]}
+    for x in dl:
+        x["inhoud"] = (x.get("inhoud") or "")[:700]
+    arch["datalekt"] = merge(arch.get("datalekt"), dl, lambda x: x.get("link"))
+    # NCSC: terugvullen van ontbrekende adviezen binnen de bewaartermijn
+    nc = data["ncsc"]
+    if not arch.get("ncsc_terug"):
+        try:
+            nc = nc + ncsc(days=185, limit=900)
+            arch["ncsc_terug"] = iso(NOW)
+        except Exception as e:  # noqa: BLE001
+            STATUS["archief NCSC"] = {"ok": False, "err": str(e)[:200]}
+    slim = lambda x: {k: x.get(k) for k in ("id", "title", "date", "link", "kans", "schade", "cwe", "cves", "names", "opl")}  # noqa: E731
+    arch["ncsc"] = merge(arch.get("ncsc"), [slim(x) for x in nc], lambda x: x.get("id"))
+    for x in arch["ncsc"]:
+        x["opl"] = (x.get("opl") or "")[:600]
+    # nieuws en mediaberichten over incidenten
+    pick = lambda x: {k: x.get(k) for k in ("title", "link", "domain", "date")}  # noqa: E731
+    arch["nieuws"] = merge(arch.get("nieuws"), [pick(x) for x in data["nieuws"] if THREAT.search(x.get("title", ""))], lambda x: _nl(x.get("link")) or _nt(x.get("title")))
+    arch["gdeltIncidenten"] = merge(arch.get("gdeltIncidenten"), [pick(x) for x in data["gdeltIncidenten"]], lambda x: _nl(x.get("link")) or _nt(x.get("title")))
+    # lopende dreigingen: per naam bijhouden van eerste en laatste melding
+    od = {o["key"].lower(): o for o in arch.get("opkomend", [])}
+    for o in data["opkomend"]:
+        k = o["key"].lower()
+        prev = od.get(k, {})
+        ber = {(_nl(b.get("link")) or _nt(b.get("title"))): b for b in prev.get("berichten", []) + o.get("berichten", [])}
+        od[k] = {**o, "eerste": min(x for x in (prev.get("eerste"), o.get("eerste")) if x),
+                 "laatste": max(x for x in (prev.get("laatste"), o.get("laatste")) if x),
+                 "bronnen": sorted(set(prev.get("bronnen", [])) | set(o.get("bronnen", []))),
+                 "n": max(prev.get("n", 0), o.get("n", 0)),
+                 "cves": sorted(set(prev.get("cves", [])) | set(o.get("cves", []))),
+                 "ncsc": sorted(set(prev.get("ncsc", [])) | set(o.get("ncsc", []))),
+                 "berichten": sorted(ber.values(), key=lambda b: b.get("date") or "")[-8:]}
+    arch["opkomend"] = [o for o in od.values() if age_days(o.get("laatste")) <= ARCH_DAYS]
+    arch["bijgewerkt"] = iso(NOW)
+    with open(os.path.join(OUT, "archief.json"), "w", encoding="utf-8") as fh:
+        json.dump(arch, fh, ensure_ascii=False, separators=(",", ":"))
+    return {k: len(v) for k, v in arch.items() if isinstance(v, list)}
 
 
 def main():
@@ -472,6 +556,7 @@ def main():
     for o in data["opkomend"]:
         o["cveinfo"] = [{k: byid[c].get(k) for k in ("id", "score", "desc", "names", "epss", "cwe")} for c in o["cves"] if c in byid]
 
+    run("Archief", lambda: [archief(data)], [])
     data["status"] = STATUS
     with open(os.path.join(OUT, "dreigingsbeeld.json"), "w", encoding="utf-8") as fh:
         json.dump(data, fh, ensure_ascii=False, separators=(",", ":"))
