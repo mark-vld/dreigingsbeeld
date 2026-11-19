@@ -348,7 +348,10 @@ STOP = {"powershell", "sharepoint", "openai", "chatgpt", "github", "gitlab", "li
 THREAT = re.compile(r"lek|kwetsbaar|vulnerab|exploit|zero.day|aanval|attack|patch|cve-|hack|ransomware|offline|misbruik|flaw|bug|rce", re.I)
 
 
-def opkomend(items, ncsc_items, window=4):
+REFLECT = re.compile(r"\bminister|staatssecretaris|kamerleden|kamervragen|tweede kamer|\bzegt\b|\bsays\b|verwacht|in de toekomst|toekomst|lessen|terugblik|evaluatie|opinie|column|achtergrond|podcast|interview|onderzoek naar|rapport|\bopinion\b|lessons|looking back", re.I)
+
+
+def opkomend(items, ncsc_items, window=7):
     """Detecteert dreigingen die in korte tijd in meerdere onafhankelijke bronnen opduiken (CVE nummers en benamingen)."""
     groups = {}
     def add(key, kind, it):
@@ -358,8 +361,8 @@ def opkomend(items, ncsc_items, window=4):
         if age_days(it.get("date")) > window:
             continue
         text = f'{it.get("title", "")} {it.get("desc", "")}'
-        if not THREAT.search(text):
-            continue
+        if not THREAT.search(text) or REFLECT.search(it.get("title", "")):
+            continue   # beschouwingen en uitspraken zijn geen bewijs dat een dreiging nog speelt
         for c in set(re.findall(r"CVE-\d{4}-\d{4,}", text, re.I)):
             add(c.upper(), "cve", it)
         for w in set(re.findall(r"\b[A-Za-z][A-Za-z0-9]*(?:[a-z][A-Z]|[A-Za-z]\d[A-Za-z])[A-Za-z0-9]*\b", text)):
@@ -368,10 +371,15 @@ def opkomend(items, ncsc_items, window=4):
         for w in set(re.findall(r"\b\w+(?:shell|bleed|jack|hammer|doom|storm)\b", text, re.I)):
             if w.lower() not in STOP:
                 add(w, "naam", it)
+    # NCSC nieuwsberichten over dreigingen zijn op zichzelf een sterk signaal (vaak de openbare versie van een flash-report)
+    for it in items:
+        if it.get("domain") == "ncsc.nl" and age_days(it.get("date")) <= window and THREAT.search(it.get("title", "")):
+            key = re.sub(r"\s*[-:–]\s*(update nu|patch nu|bereid je voor.*|patches beschikbaar.*)$", "", it["title"], flags=re.I).strip()
+            add("NCSC: " + key[:80], "ncsc", it)
     out = []
     for g in groups.values():
         doms = sorted({i.get("domain", "") for i in g["items"]})
-        if len(doms) < 2:
+        if len(doms) < 2 and not (g["kind"] == "ncsc" or "ncsc.nl" in doms):
             continue
         its = sorted(g["items"], key=lambda i: i.get("date", ""))
         cves = sorted({c.upper() for i in its for c in re.findall(r"CVE-\d{4}-\d{4,}", f'{i.get("title","")} {i.get("desc","")}', re.I)})
@@ -379,7 +387,7 @@ def opkomend(items, ncsc_items, window=4):
             cves = [g["key"]]
         ncsc_hit = [n["id"] for n in ncsc_items if g["key"].lower() in (n["title"] + " " + " ".join(n.get("cves", []))).lower()
                     or any(c in n.get("cves", []) for c in cves)]
-        out.append({"key": g["key"], "kind": g["kind"], "bronnen": doms, "n": len(its), "eerste": its[0].get("date"),
+        out.append({"key": g["key"], "kind": g["kind"], "ncscNieuws": "ncsc.nl" in doms, "bronnen": doms, "n": len(its), "eerste": its[0].get("date"),
                     "laatste": its[-1].get("date"), "cves": cves[:10], "ncsc": ncsc_hit[:5],
                     "berichten": [{k: i.get(k) for k in ("title", "link", "domain", "date")} for i in its[-12:]]})
     # samenvoegen: een CVE groep die volledig binnen een naamgroep valt verdwijnt
