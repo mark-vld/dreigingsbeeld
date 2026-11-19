@@ -368,9 +368,12 @@ def opkomend(items, ncsc_items, window=7):
         for w in set(re.findall(r"\b[A-Za-z][A-Za-z0-9]*(?:[a-z][A-Z]|[A-Za-z]\d[A-Za-z])[A-Za-z0-9]*\b", text)):
             if len(w) >= 5 and w.lower() not in STOP and not re.match(r"^(i|e)[A-Z]", w):
                 add(w, "naam", it)
-        for w in set(re.findall(r"\b\w+(?:shell|bleed|jack|hammer|doom|storm)\b", text, re.I)):
+        for w in set(re.findall(r"\b\w+(?:shell|bleed|jack|hammer|doom|storm|bomb)\b", text, re.I)):
             if w.lower() not in STOP:
                 add(w, "naam", it)
+        # protocol gevolgd door een naam, bijvoorbeeld "HTTP/2 Bomb" of "HTTP/2 Rapid Reset"
+        for m in set(re.findall(r"\b((?:HTTP/[123]|TLS|SSH|DNS|SMB|RDP|BGP|QUIC)[\s-]+[A-Z][a-z]{2,}(?:\s+[A-Z][a-z]{2,})?)\b", text)):
+            add(re.sub(r"[\s-]+", " ", m), "naam", it)
     # NCSC nieuwsberichten over dreigingen zijn op zichzelf een sterk signaal (vaak de openbare versie van een flash-report)
     for it in items:
         if it.get("domain") == "ncsc.nl" and age_days(it.get("date")) <= window and THREAT.search(it.get("title", "")):
